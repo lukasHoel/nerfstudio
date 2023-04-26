@@ -40,7 +40,7 @@ from nerfstudio.cameras.cameras import Cameras, CameraType
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.model_components import renderers
 from nerfstudio.pipelines.base_pipeline import Pipeline
-from nerfstudio.utils import install_checks
+from nerfstudio.utils import install_checks, colormaps
 from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import ItersPerSecColumn
 
@@ -57,6 +57,7 @@ def _render_trajectory_video(
     seconds: float = 5.0,
     output_format: Literal["images", "video"] = "video",
     camera_type: CameraType = CameraType.PERSPECTIVE,
+    output_image_metadata: Optional[List] = None,
 ) -> None:
     """Helper function to create a video of the spiral trajectory.
 
@@ -70,6 +71,7 @@ def _render_trajectory_video(
         seconds: Length of output video.
         output_format: How to save output data.
         camera_type: Camera projection format type.
+        output_image_metadata: original file names of the loaded rgb images in the dataset, should be used to define the output name when saving all images
     """
     CONSOLE.print("[bold green]Creating trajectory " + output_format)
     cameras.rescale_output_resolution(rendered_resolution_scaling_factor)
@@ -126,13 +128,28 @@ def _render_trajectory_video(
                             f"Please set --rendered_output_name to one of: {outputs.keys()}", justify="center"
                         )
                         sys.exit(1)
-                    output_image = outputs[rendered_output_name].cpu().numpy()
+                    output_image = outputs[rendered_output_name]
+
+                    '''
+                    if "depth" in rendered_output_name and "accumulation" in outputs:
+                        output_image = colormaps.apply_depth_colormap(
+                            output_image,
+                            accumulation=outputs["accumulation"],
+                        )
+                    '''
+
+                    output_image = output_image.cpu().numpy()
+
                     if output_image.shape[-1] == 1:
                         output_image = np.concatenate((output_image,) * 3, axis=-1)
                     render_image.append(output_image)
                 render_image = np.concatenate(render_image, axis=1)
                 if output_format == "images":
-                    media.write_image(output_image_dir / f"{camera_idx:05d}.png", render_image)
+                    filename = f"{camera_idx:05d}"
+                    if output_image_metadata is not None:
+                        filename = output_image_metadata[camera_idx]
+                        filename = "rendered_" + filename.stem
+                    media.write_image(output_image_dir / f"{filename}.png", render_image)
                 if output_format == "video":
                     if writer is None:
                         render_width = int(render_image.shape[1])
@@ -276,9 +293,9 @@ class RenderTrajectory:
     """Path to config YAML file."""
     rendered_output_names: List[str] = field(default_factory=lambda: ["rgb"])
     """Name of the renderer outputs to use. rgb, depth, etc. concatenates them along y axis"""
-    traj: Literal["spiral", "filename", "interpolate", "train"] = "spiral"
+    traj: Literal["spiral", "filename", "interpolate", "train_images", "eval_images"] = "spiral"
     """Trajectory type to render. Select between spiral-shaped trajectory, trajectory loaded from
-    a viewer-generated file, interpolated camera paths from the eval dataset, and all train cameras."""
+    a viewer-generated file, interpolated camera paths from the eval dataset, all train cameras, and all eval cameras."""
     downscale_factor: int = 1
     """Scaling factor to apply to the camera image resolution."""
     camera_path_filename: Path = Path("camera_path.json")
@@ -306,6 +323,7 @@ class RenderTrajectory:
 
         seconds = self.seconds
         crop_data = None
+        output_image_metadata = None
 
         # TODO(ethan): use camera information from parsing args
         if self.traj == "spiral":
@@ -332,10 +350,26 @@ class RenderTrajectory:
             camera_path = get_interpolated_camera_path(
                 cameras=pipeline.datamanager.eval_dataloader.cameras, steps=self.interpolation_steps
             )
-        elif self.traj == "train":
+        elif self.traj == "train_images":
             camera_type = CameraType.PERSPECTIVE
+
+            # load train dataset, images are in the order of transforms.json
             pipeline.datamanager.setup_train()
+
+            # should render all cameras in train dataset
             camera_path = pipeline.datamanager.train_dataset.cameras
+
+            # get image_filenames as metadata s.t. output images could have this as filename
+            output_image_metadata = pipeline.datamanager.train_dataset.image_filenames
+
+        elif self.traj == "eval_images":
+            camera_type = CameraType.PERSPECTIVE
+
+            # should render all cameras in eval dataset
+            camera_path = pipeline.datamanager.eval_dataset.cameras
+
+            # get image_filenames as metadata s.t. output images could have this as filename
+            output_image_metadata = pipeline.datamanager.eval_dataset.image_filenames
         else:
             assert_never(self.traj)
 
@@ -349,6 +383,7 @@ class RenderTrajectory:
             seconds=seconds,
             output_format=self.output_format,
             camera_type=camera_type,
+            output_image_metadata=output_image_metadata
         )
 
 
