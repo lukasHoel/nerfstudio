@@ -263,9 +263,9 @@ class RenderTrajectory:
     """Path to config YAML file."""
     rendered_output_names: List[str] = field(default_factory=lambda: ["rgb"])
     """Name of the renderer outputs to use. rgb, depth, etc. concatenates them along y axis"""
-    traj: Literal["spiral", "filename", "interpolate"] = "spiral"
+    traj: Literal["spiral", "filename", "interpolate", "train"] = "spiral"
     """Trajectory type to render. Select between spiral-shaped trajectory, trajectory loaded from
-    a viewer-generated file and interpolated camera paths from the eval dataset."""
+    a viewer-generated file, interpolated camera paths from the eval dataset, and all train cameras."""
     downscale_factor: int = 1
     """Scaling factor to apply to the camera image resolution."""
     camera_path_filename: Path = Path("camera_path.json")
@@ -319,6 +319,10 @@ class RenderTrajectory:
             camera_path = get_interpolated_camera_path(
                 cameras=pipeline.datamanager.eval_dataloader.cameras, steps=self.interpolation_steps
             )
+        elif self.traj == "train":
+            camera_type = CameraType.PERSPECTIVE
+            pipeline.datamanager.setup_train()
+            camera_path = pipeline.datamanager.train_dataset.cameras
         else:
             assert_never(self.traj)
 
