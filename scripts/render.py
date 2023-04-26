@@ -150,6 +150,7 @@ def _render_trajectory_video(
                         filename = output_image_metadata[camera_idx]
                         filename = "rendered_" + filename.stem
                     media.write_image(output_image_dir / f"{filename}.png", render_image)
+                    np.save(output_image_dir / f"{filename}.npy", render_image)
                 if output_format == "video":
                     if writer is None:
                         render_width = int(render_image.shape[1])
