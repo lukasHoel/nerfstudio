@@ -1,4 +1,4 @@
-# Copyright 2022 The Nerfstudio Team. All rights reserved.
+# Copyright 2022 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""" Utilites for generating custom gui elements in the viewer """
+""" Utilities for generating custom gui elements in the viewer """
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def parse_object(
     ret = []
     # get a list of the properties of the object, sorted by whether things are instances of type_check
     obj_props = [(k, getattr(obj, k)) for k in dir(obj)]
-    for (k, v) in obj_props:
+    for k, v in obj_props:
         if k[0] == "_":
             continue
         new_tree_stub = f"{tree_stub}/{k}"
