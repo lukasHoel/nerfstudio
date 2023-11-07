@@ -23,6 +23,7 @@ from typing import Dict, List, Optional, Tuple, Type
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.nn import Parameter
 from torchmetrics import PeakSignalNoiseRatio
 from torchmetrics.functional import structural_similarity_index_measure
@@ -57,7 +58,7 @@ from nerfstudio.model_components.renderers import (
     NormalsRenderer,
     RGBRenderer,
 )
-from nerfstudio.model_components.scene_colliders import NearFarCollider
+from nerfstudio.model_components.scene_colliders import NearFarCollider, AABBBoxCollider
 from nerfstudio.model_components.shaders import NormalsShader
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps
@@ -107,11 +108,15 @@ class NerfactoModelConfig(ModelConfig):
     """Arguments for the proposal density fields."""
     proposal_initial_sampler: Literal["piecewise", "uniform"] = "piecewise"
     """Initial sampler for the proposal network. Piecewise is preferred for unbounded scenes."""
+    # (MV-DIFF) we use foreground loss to not have floaters in the masked-out regions
+    fg_mask_loss_mult: float = 100.0
+    """Foreground mask loss multiplier."""
     interlevel_loss_mult: float = 1.0
     """Proposal loss multiplier."""
-    distortion_loss_mult: float = 0.002
+    # (MV-DIFF) we use high distortion-loss weight to not have floaters near the surface
+    distortion_loss_mult: float = 1.0
     """Distortion loss multiplier."""
-    orientation_loss_mult: float = 0.0001
+    orientation_loss_mult: float = 10.0
     """Orientation loss multiplier on computed normals."""
     pred_normal_loss_mult: float = 0.001
     """Predicted normal loss multiplier."""
@@ -227,7 +232,9 @@ class NerfactoModel(Model):
         self.normals_shader = NormalsShader()
 
         # losses
-        self.rgb_loss = MSELoss()
+        # (MV-DIFF) We replace it with l1 loss to have better outlier acceptance
+        #self.rgb_loss = MSELoss()
+        self.rgb_loss = torch.nn.SmoothL1Loss()
 
         # metrics
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
@@ -272,10 +279,17 @@ class NerfactoModel(Model):
         return callbacks
 
     def get_outputs(self, ray_bundle: RayBundle):
+        # (MV-DIFF) we use aabb box collider during rendering to have fewer floaters. somehow during training it does not work because of error during backward(), so we only use it during inference
+        if not self.training:
+            self.collider = AABBBoxCollider(scene_box=self.scene_box, near_plane=0.05)
+        else:
+            self.collider = NearFarCollider(near_plane=self.config.near_plane, far_plane=self.config.far_plane)
+
         ray_samples, densities_list, weights_list, ray_samples_list = self.proposal_sampler(
             ray_bundle, density_fns=self.density_fns
         )
-        field_outputs = self.field(ray_samples, compute_normals=self.config.predict_normals)
+        # (MV-DIFF) We do not use view-dependent effects during training
+        field_outputs = self.field(ray_samples, compute_normals=self.config.predict_normals, no_dir_embedding=True)
         weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
         densities_list.append(field_outputs[FieldHeadNames.DENSITY])
         weights_list.append(weights)
@@ -289,6 +303,7 @@ class NerfactoModel(Model):
             "rgb": rgb,
             "accumulation": accumulation,
             "depth": depth,
+            "weights": weights,
         }
 
         if self.visibility_field is not None:
@@ -350,6 +365,15 @@ class NerfactoModel(Model):
             loss_dict["interlevel_loss"] = self.config.interlevel_loss_mult * interlevel_loss(
                 outputs["weights_list"], outputs["ray_samples_list"]
             )
+
+            if "mask" in batch and self.config.fg_mask_loss_mult > 0.0:
+                with torch.autocast(enabled=False, device_type="cuda"):
+                    fg_label = batch["mask"].float().to(self.device)
+                    weights_sum = outputs["weights"].sum(dim=1).clip(1e-3, 1.0 - 1e-3)
+                    loss_dict["fg_mask_loss"] = (
+                        F.binary_cross_entropy(weights_sum, fg_label) * self.config.fg_mask_loss_mult
+                    )
+
             assert metrics_dict is not None and "distortion" in metrics_dict
             loss_dict["distortion_loss"] = self.config.distortion_loss_mult * metrics_dict["distortion"]
             if self.config.predict_normals:
