@@ -5,8 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="f3c7f4f3-150c-408b-9ac6-65589449ce4d" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/nerfstudio/data/pixel_samplers.py" beforeDir="false" afterPath="$PROJECT_DIR$/nerfstudio/data/pixel_samplers.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/nerfstudio/fields/nerfacto_field.py" beforeDir="false" afterPath="$PROJECT_DIR$/nerfstudio/fields/nerfacto_field.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/nerfstudio/models/nerfacto.py" beforeDir="false" afterPath="$PROJECT_DIR$/nerfstudio/models/nerfacto.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
