@@ -23,6 +23,7 @@ from typing import Dict, List, Literal, Tuple, Type
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.nn import Parameter
 from torchmetrics.functional import structural_similarity_index_measure
 from torchmetrics.image import PeakSignalNoiseRatio
@@ -45,7 +46,7 @@ from nerfstudio.model_components.losses import (
 )
 from nerfstudio.model_components.ray_samplers import ProposalNetworkSampler, UniformSampler
 from nerfstudio.model_components.renderers import AccumulationRenderer, DepthRenderer, NormalsRenderer, RGBRenderer
-from nerfstudio.model_components.scene_colliders import NearFarCollider
+from nerfstudio.model_components.scene_colliders import NearFarCollider, AABBBoxCollider
 from nerfstudio.model_components.shaders import NormalsShader
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps
@@ -99,9 +100,13 @@ class NerfactoModelConfig(ModelConfig):
     """Arguments for the proposal density fields."""
     proposal_initial_sampler: Literal["piecewise", "uniform"] = "piecewise"
     """Initial sampler for the proposal network. Piecewise is preferred for unbounded scenes."""
+    # (MV-DIFF) we use foreground loss to not have floaters in the masked-out regions
+    fg_mask_loss_mult: float = 100.0
+    """Foreground mask loss multiplier."""
     interlevel_loss_mult: float = 1.0
     """Proposal loss multiplier."""
-    distortion_loss_mult: float = 0.002
+    # (MV-DIFF) we use high distortion-loss weight to not have floaters near the surface
+    distortion_loss_mult: float = 10.0
     """Distortion loss multiplier."""
     orientation_loss_mult: float = 0.0001
     """Orientation loss multiplier on computed normals."""
@@ -148,6 +153,13 @@ class NerfactoModel(Model):
             scene_contraction = None
         else:
             scene_contraction = SceneContraction(order=float("inf"))
+
+        self.scene_box.aabb[0, 0] = -0.25
+        self.scene_box.aabb[0, 1] = -0.25
+        self.scene_box.aabb[0, 2] = -1.0
+        self.scene_box.aabb[1, 0] = 0.25
+        self.scene_box.aabb[1, 1] = 0.25
+        self.scene_box.aabb[1, 2] = 0.0
 
         # Fields
         self.field = NerfactoField(
@@ -222,6 +234,7 @@ class NerfactoModel(Model):
 
         # Collider
         self.collider = NearFarCollider(near_plane=self.config.near_plane, far_plane=self.config.far_plane)
+        self.collider = AABBBoxCollider(scene_box=self.scene_box, near_plane=self.config.near_plane)
 
         # renderers
         self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
@@ -310,6 +323,7 @@ class NerfactoModel(Model):
             "accumulation": accumulation,
             "depth": depth,
             "expected_depth": expected_depth,
+            "weights": weights,
         }
 
         if self.config.predict_normals:
@@ -364,6 +378,15 @@ class NerfactoModel(Model):
             loss_dict["interlevel_loss"] = self.config.interlevel_loss_mult * interlevel_loss(
                 outputs["weights_list"], outputs["ray_samples_list"]
             )
+
+            if "mask" in batch and self.config.fg_mask_loss_mult > 0.0:
+                with torch.autocast(enabled=False, device_type="cuda"):
+                    fg_label = batch["mask"].float().to(self.device)
+                    weights_sum = outputs["weights"].sum(dim=1).clip(1e-3, 1.0 - 1e-3)
+                    loss_dict["fg_mask_loss"] = (
+                        F.binary_cross_entropy(weights_sum, fg_label) * self.config.fg_mask_loss_mult
+                    )
+
             assert metrics_dict is not None and "distortion" in metrics_dict
             loss_dict["distortion_loss"] = self.config.distortion_loss_mult * metrics_dict["distortion"]
             if self.config.predict_normals:

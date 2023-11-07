@@ -150,7 +150,7 @@ class PixelSampler:
         device = batch["image"].device
         num_images, image_height, image_width, _ = batch["image"].shape
 
-        if "mask" in batch:
+        if "mask" in batch and False:
             if self.config.is_equirectangular:
                 indices = self.sample_method_equirectangular(
                     num_rays_per_batch, num_images, image_height, image_width, mask=batch["mask"], device=device
@@ -204,7 +204,7 @@ class PixelSampler:
         all_indices = []
         all_images = []
 
-        if "mask" in batch:
+        if "mask" in batch and False:
             num_rays_in_batch = num_rays_per_batch // num_images
             for i in range(num_images):
                 image_height, image_width, _ = batch["image"][i].shape
